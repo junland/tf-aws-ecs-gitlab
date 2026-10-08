@@ -32,6 +32,13 @@ gitlab_rails['redis_ssl'] = true
 gitlab_rails['gitlab_shell_ssh_port'] = 22
 gitlab_rails['monitoring_whitelist'] = settings.fetch('monitoring_cidrs')
 
+# The Linux-package supervisor clears inherited environment variables.
+task_credentials = {
+  'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI' => ENV.fetch('AWS_CONTAINER_CREDENTIALS_RELATIVE_URI')
+}
+gitlab_rails['env'] = task_credentials
+gitlab_workhorse['env'] = task_credentials
+
 gitlab_rails['object_store']['enabled'] = true
 gitlab_rails['object_store']['proxy_download'] = true
 gitlab_rails['object_store']['connection'] = {

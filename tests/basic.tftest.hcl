@@ -174,6 +174,10 @@ run "managed_infrastructure" {
     condition     = contains(local.gitlab_settings.monitoring_cidrs, "10.0.0.0/16")
     error_message = "The GitLab monitoring allowlist must permit NLB health checks originating inside the VPC."
   }
+  assert {
+    condition     = strcontains(local.gitlab_config, "ENV.fetch('AWS_CONTAINER_CREDENTIALS_RELATIVE_URI')") && strcontains(local.gitlab_config, "gitlab_rails['env'] = task_credentials") && strcontains(local.gitlab_config, "gitlab_workhorse['env'] = task_credentials")
+    error_message = "Rails/Sidekiq and Workhorse must retain the ECS credential URI after service supervision clears their environment."
+  }
 }
 
 run "existing_network_and_dns" {
