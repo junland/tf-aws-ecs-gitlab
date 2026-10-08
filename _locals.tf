@@ -9,8 +9,9 @@ locals {
   secret_arns        = distinct([aws_db_instance.postgresql.master_user_secret[0].secret_arn, var.gitlab_root_password_secret_arn])
 
   gitlab_settings = {
-    external_url = "https://${var.gitlab_hostname}"
-    hostname     = var.gitlab_hostname
+    external_url     = "https://${var.gitlab_hostname}"
+    hostname         = var.gitlab_hostname
+    monitoring_cidrs = ["127.0.0.0/8", "::1/128", data.aws_vpc.selected.cidr_block]
     postgresql = {
       host     = aws_db_instance.postgresql.address
       port     = var.postgresql_port

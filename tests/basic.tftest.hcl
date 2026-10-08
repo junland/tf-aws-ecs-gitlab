@@ -21,6 +21,11 @@ mock_provider "aws" {
       availability_zone = "us-east-1a"
     }
   }
+  mock_data "aws_vpc" {
+    defaults = {
+      cidr_block = "10.0.0.0/16"
+    }
+  }
   mock_data "aws_ssm_parameter" {
     defaults = {
       value = "ami-0123456789abcdef0"
@@ -55,6 +60,11 @@ mock_provider "aws" {
   mock_resource "aws_ebs_volume" {
     defaults = {
       id = "vol-0123456789abcdef0"
+    }
+  }
+  mock_resource "aws_vpc" {
+    defaults = {
+      id = "vpc-0123456789abcdef0"
     }
   }
   mock_resource "aws_lb" {
@@ -160,6 +170,10 @@ run "managed_infrastructure" {
     condition     = output.gitlab_url == "https://gitlab.example.com"
     error_message = "The application URL must use HTTPS."
   }
+  assert {
+    condition     = contains(local.gitlab_settings.monitoring_cidrs, "10.0.0.0/16")
+    error_message = "The GitLab monitoring allowlist must permit NLB health checks originating inside the VPC."
+  }
 }
 
 run "existing_network_and_dns" {
@@ -250,4 +264,20 @@ run "reject_duplicate_azs" {
     azs = ["us-east-1a", "us-east-1a"]
   }
   expect_failures = [var.azs]
+}
+
+run "reject_too_small_vpc" {
+  command = plan
+  variables {
+    vpc_cidr = "10.0.0.0/24"
+  }
+  expect_failures = [var.vpc_cidr]
+}
+
+run "reject_invalid_resource_prefix" {
+  command = plan
+  variables {
+    name_prefix = "gitlab--test"
+  }
+  expect_failures = [var.name_prefix]
 }

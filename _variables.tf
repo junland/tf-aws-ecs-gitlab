@@ -3,8 +3,8 @@ variable "name_prefix" {
   type        = string
   default     = "gitlab"
   validation {
-    condition     = can(regex("^[a-z][a-z0-9-]{0,23}[a-z0-9]$", var.name_prefix))
-    error_message = "name_prefix must be 2-25 lowercase alphanumeric/hyphen characters, starting with a letter and ending with an alphanumeric character."
+    condition     = can(regex("^[a-z][a-z0-9-]{0,23}[a-z0-9]$", var.name_prefix)) && !strcontains(var.name_prefix, "--")
+    error_message = "name_prefix must be 2-25 lowercase alphanumeric/hyphen characters, starting with a letter and ending with an alphanumeric character, without consecutive hyphens."
   }
 }
 
@@ -25,8 +25,8 @@ variable "vpc_cidr" {
   type        = string
   default     = "10.0.0.0/16"
   validation {
-    condition     = can(cidrnetmask(var.vpc_cidr)) && can(cidrsubnet(var.vpc_cidr, 8, 102))
-    error_message = "vpc_cidr must be an IPv4 CIDR with room for eight subnet prefix bits."
+    condition     = can(cidrnetmask(var.vpc_cidr)) && try(tonumber(split("/", var.vpc_cidr)[1]) >= 16 && tonumber(split("/", var.vpc_cidr)[1]) <= 20, false)
+    error_message = "vpc_cidr must be an IPv4 CIDR with a /16 through /20 prefix, leaving AWS-valid /24 through /28 subnets."
   }
 }
 

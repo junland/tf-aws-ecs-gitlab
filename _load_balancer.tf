@@ -30,10 +30,8 @@ resource "aws_lb_target_group" "ssh" {
   protocol    = "TCP"
   target_type = "instance"
   health_check {
-    protocol = "HTTP"
-    port     = "8080"
-    path     = "/-/readiness"
-    matcher  = "200"
+    protocol = "TCP"
+    port     = "traffic-port"
   }
   tags = local.tags
 }
