@@ -1,0 +1,46 @@
+require 'json'
+require 'base64'
+settings = JSON.parse(Base64.decode64('${settings_base64}'))
+
+external_url settings.fetch('external_url')
+letsencrypt['enable'] = false
+nginx['listen_port'] = 80
+nginx['listen_https'] = false
+nginx['redirect_http_to_https'] = false
+nginx['proxy_set_headers'] = {
+  'Host' => '$http_host',
+  'X-Real-IP' => '$remote_addr',
+  'X-Forwarded-For' => '$proxy_add_x_forwarded_for',
+  'X-Forwarded-Proto' => 'https',
+  'X-Forwarded-Ssl' => 'on'
+}
+
+postgresql['enable'] = false
+gitlab_rails['db_adapter'] = 'postgresql'
+gitlab_rails['db_host'] = settings.fetch('postgresql').fetch('host')
+gitlab_rails['db_port'] = settings.fetch('postgresql').fetch('port')
+gitlab_rails['db_database'] = settings.fetch('postgresql').fetch('database')
+gitlab_rails['db_username'] = settings.fetch('postgresql').fetch('username')
+gitlab_rails['db_password'] = ENV.fetch('GITLAB_POSTGRESQL_PASSWORD')
+gitlab_rails['db_sslmode'] = 'require'
+gitlab_rails['initial_root_password'] = ENV.fetch('GITLAB_INITIAL_ROOT_PASSWORD')
+
+redis['enable'] = false
+gitlab_rails['redis_host'] = settings.fetch('redis_host')
+gitlab_rails['redis_port'] = 6379
+gitlab_rails['redis_ssl'] = true
+gitlab_rails['gitlab_shell_ssh_port'] = 22
+
+gitlab_rails['object_store']['enabled'] = true
+gitlab_rails['object_store']['proxy_download'] = true
+gitlab_rails['object_store']['connection'] = {
+  'provider' => 'AWS',
+  'region' => settings.fetch('s3_region'),
+  'use_iam_profile' => true
+}
+settings.fetch('s3_buckets').each do |object_type, bucket|
+  gitlab_rails['object_store']['objects'][object_type]['bucket'] = bucket
+end
+
+registry['enable'] = false
+prometheus_monitoring['enable'] = false
