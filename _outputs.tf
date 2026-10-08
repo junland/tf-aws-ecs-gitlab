@@ -1,3 +1,8 @@
+output "s3_buckets" {
+  description = "Effective GitLab object-storage bucket names, keyed by object type (managed or supplied)."
+  value       = local.s3_buckets
+}
+
 output "cluster_name" {
   description = "ECS cluster name."
   value       = aws_ecs_cluster.this.name

@@ -151,8 +151,40 @@ run "managed_infrastructure" {
     error_message = "GitLab must use required RDS, ElastiCache, and S3 instead of bundled dependencies."
   }
   assert {
-    condition     = local.gitlab_settings.postgresql.host == aws_db_instance.postgresql.address && local.gitlab_settings.redis_host == aws_elasticache_replication_group.this.primary_endpoint_address && local.gitlab_settings.s3_buckets == var.s3_buckets
+    condition     = local.gitlab_settings.postgresql.host == aws_db_instance.postgresql.address && local.gitlab_settings.redis_host == aws_elasticache_replication_group.this.primary_endpoint_address && local.gitlab_settings.s3_buckets == tomap(var.s3_buckets)
     error_message = "GitLab must receive the managed dependency endpoints and required bucket names."
+  }
+  assert {
+    condition     = length(aws_s3_bucket.gitlab) == 8 && alltrue([for kind, bucket in aws_s3_bucket.gitlab : bucket.bucket == var.s3_buckets[kind] && !bucket.force_destroy])
+    error_message = "Default managed mode must create all eight explicitly named buckets without forced deletion."
+  }
+  assert {
+    condition     = alltrue([for block in aws_s3_bucket_public_access_block.gitlab : block.block_public_acls && block.block_public_policy && block.ignore_public_acls && block.restrict_public_buckets])
+    error_message = "Every managed bucket must block all public access."
+  }
+  assert {
+    condition     = length(aws_s3_bucket_versioning.gitlab) == 8 && alltrue([for config in aws_s3_bucket_versioning.gitlab : config.versioning_configuration[0].status == "Enabled"])
+    error_message = "All managed buckets must enable versioning."
+  }
+  assert {
+    condition     = length(aws_s3_bucket_server_side_encryption_configuration.gitlab) == 8 && alltrue(flatten([for config in aws_s3_bucket_server_side_encryption_configuration.gitlab : [for rule in config.rule : rule.apply_server_side_encryption_by_default[0].sse_algorithm == "AES256"]]))
+    error_message = "All managed buckets must encrypt objects by default."
+  }
+  assert {
+    condition     = alltrue([for controls in aws_s3_bucket_ownership_controls.gitlab : controls.rule[0].object_ownership == "BucketOwnerEnforced"]) && length(aws_s3_bucket_policy.gitlab) == 8
+    error_message = "Managed buckets must disable ACLs and enforce TLS with bucket policies."
+  }
+  assert {
+    condition     = alltrue([for policy in data.aws_iam_policy_document.s3_transport : policy.statement[0].effect == "Deny" && one(policy.statement[0].condition).variable == "aws:SecureTransport" && one(one(policy.statement[0].condition).values) == "false"])
+    error_message = "Bucket policies must deny insecure transport."
+  }
+  assert {
+    condition     = length(aws_s3_bucket_lifecycle_configuration.gitlab) == 8 && alltrue([for config in aws_s3_bucket_lifecycle_configuration.gitlab : config.rule[0].abort_incomplete_multipart_upload[0].days_after_initiation == 7])
+    error_message = "Incomplete multipart uploads must be cleaned up without expiring GitLab objects."
+  }
+  assert {
+    condition     = output.s3_buckets == tomap(var.s3_buckets)
+    error_message = "The output must expose the effective bucket names."
   }
   assert {
     condition     = length(data.aws_iam_policy_document.s3.statement[0].resources) == 8 && length(data.aws_iam_policy_document.s3.statement[1].resources) == 8
@@ -200,6 +232,7 @@ run "existing_network_and_dns" {
   command = plan
   variables {
     create_vpc                   = false
+    create_s3_buckets            = false
     vpc_id                       = "vpc-0123456789abcdef0"
     private_subnet_ids           = ["subnet-0123456789abcdef0", "subnet-0123456789abcdef1"]
     public_subnet_ids            = []
@@ -231,6 +264,63 @@ run "existing_network_and_dns" {
     condition     = strcontains(local.host_user_data, "source = \"public.ecr.aws/bottlerocket/bottlerocket-bootstrap:v0.3.6\"")
     error_message = "Explicit pinned bootstrap image overrides must be honored."
   }
+  assert {
+    condition     = length(aws_s3_bucket.gitlab) == 0 && length(aws_s3_bucket_policy.gitlab) == 0 && length(aws_s3_bucket_versioning.gitlab) == 0 && local.gitlab_settings.s3_buckets == tomap(var.s3_buckets)
+    error_message = "Existing-bucket mode must not create or modify buckets and must preserve application configuration."
+  }
+}
+
+run "generated_bucket_names" {
+  command = plan
+  variables {
+    s3_buckets = null
+  }
+  assert {
+    condition     = length(aws_s3_bucket.gitlab) == 8 && alltrue([for kind, bucket in aws_s3_bucket.gitlab : bucket.bucket_prefix == "gitlab-${replace(kind, "_", "-")}-"])
+    error_message = "Without bucket inputs, all eight buckets must use unique provider-generated names with descriptive prefixes."
+  }
+  assert {
+    condition     = toset(keys(local.gitlab_settings.s3_buckets)) == local.s3_object_types && length(output.s3_buckets) == 8
+    error_message = "Generated bucket names must reach GitLab and outputs."
+  }
+}
+
+run "long_generated_bucket_prefix" {
+  command = plan
+  variables {
+    name_prefix = "gitlab-production-cluster"
+    s3_buckets  = null
+  }
+  assert {
+    condition     = alltrue([for bucket in aws_s3_bucket.gitlab : length(bucket.bucket_prefix) <= 37])
+    error_message = "Generated prefixes must leave room for the AWS provider's unique suffix."
+  }
+}
+
+run "reject_missing_existing_buckets" {
+  command = plan
+  variables {
+    create_s3_buckets = false
+    s3_buckets        = null
+  }
+  expect_failures = [var.s3_buckets]
+}
+
+run "reject_duplicate_managed_buckets" {
+  command = plan
+  variables {
+    s3_buckets = {
+      artifacts        = "test-gitlab-shared"
+      uploads          = "test-gitlab-shared"
+      packages         = "test-gitlab-packages"
+      lfs              = "test-gitlab-lfs"
+      terraform_state  = "test-gitlab-terraform-state"
+      dependency_proxy = "test-gitlab-dependency-proxy"
+      ci_secure_files  = "test-gitlab-ci-secure-files"
+      external_diffs   = "test-gitlab-external-diffs"
+    }
+  }
+  expect_failures = [var.s3_buckets]
 }
 
 run "reject_latest_bootstrap_image" {

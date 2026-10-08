@@ -25,6 +25,7 @@ module "gitlab" {
   gitlab_ingress_cidrs            = var.gitlab_ingress_cidrs
   gitlab_ssh_cidrs                = var.gitlab_ssh_cidrs
   s3_buckets                      = var.s3_buckets
+  create_s3_buckets               = var.create_s3_buckets
 
   tags = {
     Environment = "production"
@@ -82,7 +83,8 @@ variable "gitlab_ssh_cidrs" {
 }
 
 variable "s3_buckets" {
-  description = "Pre-created private S3 buckets for each required GitLab object-storage type."
+  description = "Optional explicit names for all eight buckets; null creates uniquely named managed buckets."
+  default     = null
   type = object({
     artifacts        = string
     uploads          = string
@@ -93,6 +95,12 @@ variable "s3_buckets" {
     ci_secure_files  = string
     external_diffs   = string
   })
+}
+
+variable "create_s3_buckets" {
+  description = "Create/configure buckets by default; set false with s3_buckets to use existing buckets."
+  type        = bool
+  default     = true
 }
 
 output "gitlab_url" {

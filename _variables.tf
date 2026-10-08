@@ -272,9 +272,16 @@ variable "elasticache_engine_version" {
   default     = "7.1"
 }
 
-variable "s3_buckets" {
-  description = "Required existing S3 buckets for consolidated GitLab object storage. All eight object types must be supplied."
+variable "create_s3_buckets" {
+  description = "Create and configure all eight GitLab object-storage buckets. False requires existing bucket names in s3_buckets."
+  type        = bool
+  default     = true
   nullable    = false
+}
+
+variable "s3_buckets" {
+  description = "Optional explicit names for all eight buckets. Null generates unique names when create_s3_buckets is true; required when using existing buckets."
+  default     = null
   type = object({
     artifacts        = string
     uploads          = string
@@ -286,8 +293,16 @@ variable "s3_buckets" {
     external_diffs   = string
   })
   validation {
-    condition     = alltrue([for bucket in values(var.s3_buckets) : can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", bucket))])
+    condition     = var.s3_buckets == null ? true : alltrue([for bucket in values(var.s3_buckets) : can(regex("^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$", bucket))])
     error_message = "s3_buckets must contain nonempty S3 bucket names for every object type."
+  }
+  validation {
+    condition     = var.create_s3_buckets || var.s3_buckets != null
+    error_message = "s3_buckets must supply all eight existing bucket names when create_s3_buckets is false."
+  }
+  validation {
+    condition     = !var.create_s3_buckets || var.s3_buckets == null ? true : length(distinct(values(var.s3_buckets))) == 8
+    error_message = "Managed S3 bucket names must be distinct for all eight object types."
   }
 }
 

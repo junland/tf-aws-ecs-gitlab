@@ -5,8 +5,13 @@ locals {
   vpc_id             = var.create_vpc ? aws_vpc.this[0].id : var.vpc_id
   private_subnet_ids = var.create_vpc ? aws_subnet.private[*].id : var.private_subnet_ids
   public_subnet_ids  = var.create_vpc ? aws_subnet.public[*].id : var.public_subnet_ids
-  bucket_names       = distinct(values(var.s3_buckets))
-  secret_arns        = distinct([aws_db_instance.postgresql.master_user_secret[0].secret_arn, var.gitlab_root_password_secret_arn])
+  s3_object_types = toset([
+    "artifacts", "uploads", "packages", "lfs", "terraform_state",
+    "dependency_proxy", "ci_secure_files", "external_diffs"
+  ])
+  s3_buckets   = var.create_s3_buckets ? { for kind, bucket in aws_s3_bucket.gitlab : kind => bucket.bucket } : (var.s3_buckets == null ? {} : tomap(var.s3_buckets))
+  bucket_names = distinct(values(local.s3_buckets))
+  secret_arns  = distinct([aws_db_instance.postgresql.master_user_secret[0].secret_arn, var.gitlab_root_password_secret_arn])
 
   gitlab_settings = {
     external_url     = "https://${var.gitlab_hostname}"
@@ -19,7 +24,7 @@ locals {
       username = var.postgresql_username
     }
     redis_host = aws_elasticache_replication_group.this.primary_endpoint_address
-    s3_buckets = var.s3_buckets
+    s3_buckets = local.s3_buckets
     s3_region  = data.aws_region.current.region
   }
 
