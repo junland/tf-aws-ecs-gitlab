@@ -27,8 +27,13 @@ locals {
     settings_base64 = base64encode(jsonencode(local.gitlab_settings))
   })
 
-  host_user_data = templatefile("${path.module}/templates/user_data.sh.tftpl", {
-    cluster_name = aws_ecs_cluster.this.name
-    volume_id    = aws_ebs_volume.data.id
+  storage_bootstrap = templatefile("${path.module}/templates/bootstrap-storage.sh.tftpl", {
+    volume_id = aws_ebs_volume.data.id
+  })
+
+  host_user_data = templatefile("${path.module}/templates/user_data.toml.tftpl", {
+    cluster_name        = aws_ecs_cluster.this.name
+    bootstrap_image     = var.bottlerocket_bootstrap_image
+    bootstrap_user_data = base64encode(local.storage_bootstrap)
   })
 }

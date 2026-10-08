@@ -12,7 +12,7 @@ data "aws_vpc" "selected" {
 
 data "aws_ssm_parameter" "ecs_ami" {
   count = var.ami_id == null ? 1 : 0
-  name  = "/aws/service/ecs/optimized-ami/amazon-linux-2023/recommended/image_id"
+  name  = "/aws/service/bottlerocket/aws-ecs-2/x86_64/latest/image_id"
 }
 
 data "aws_subnet" "host" {

@@ -163,8 +163,24 @@ run "managed_infrastructure" {
     error_message = "NLB must provide TLS and Git-over-SSH, with SSH blocked by default."
   }
   assert {
-    condition     = strcontains(local.host_user_data, "RequiresMountsFor=/srv/gitlab") && strcontains(local.host_user_data, "169.254.169.254/32")
-    error_message = "The ECS agent must wait for storage and block container access to host credentials."
+    condition     = strcontains(local.host_user_data, "[settings.ecs]") && strcontains(local.host_user_data, "cluster = \"gitlab-ecs\"") && strcontains(local.host_user_data, "mode = \"always\"") && strcontains(local.host_user_data, "essential = true") && strcontains(local.host_user_data, base64encode(local.storage_bootstrap))
+    error_message = "Bottlerocket TOML must configure ECS and an essential storage bootstrap on every boot."
+  }
+  assert {
+    condition     = data.aws_ssm_parameter.ecs_ami[0].name == "/aws/service/bottlerocket/aws-ecs-2/x86_64/latest/image_id" && !strcontains(local.host_user_data, "source =")
+    error_message = "Default AMI and bootstrap image must use supported Bottlerocket ECS defaults."
+  }
+  assert {
+    condition     = alltrue([for volume in aws_ecs_task_definition.gitlab.volume : startswith(volume.host_path, "/mnt/gitlab/")]) && strcontains(local.storage_bootstrap, "/.bottlerocket/rootfs/mnt/gitlab") && strcontains(local.storage_bootstrap, "context=system_u:object_r:local_t:s0")
+    error_message = "Storage mounts must propagate into ECS under /mnt with Bottlerocket-compatible SELinux labels."
+  }
+  assert {
+    condition     = strcontains(local.storage_bootstrap, "169.254.169.254/32") && strcontains(local.storage_bootstrap, "-N DOCKER-USER") && strcontains(local.storage_bootstrap, "-I FORWARD 1 -j DOCKER-USER") && strcontains(local.host_user_data, "awsvpc-block-imds = true")
+    error_message = "Bootstrap must block bridge IMDS before Docker starts without blocking ECS task credentials."
+  }
+  assert {
+    condition     = length(aws_launch_template.host.block_device_mappings) == 1 && alltrue([for device in aws_launch_template.host.block_device_mappings : device.device_name == "/dev/xvdb" && device.ebs[0].encrypted && device.ebs[0].delete_on_termination])
+    error_message = "Bottlerocket runtime storage must be encrypted, disposable, and separate from persistent GitLab EBS."
   }
   assert {
     condition     = output.gitlab_url == "https://gitlab.example.com"
@@ -183,16 +199,17 @@ run "managed_infrastructure" {
 run "existing_network_and_dns" {
   command = plan
   variables {
-    create_vpc             = false
-    vpc_id                 = "vpc-0123456789abcdef0"
-    private_subnet_ids     = ["subnet-0123456789abcdef0", "subnet-0123456789abcdef1"]
-    public_subnet_ids      = []
-    load_balancer_internal = true
-    route53_zone_id        = "Z0123456789ABC"
-    gitlab_ssh_cidrs       = ["192.0.2.0/24"]
-    ami_id                 = "ami-0123456789abcdef0"
-    secret_kms_key_arns    = ["arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000"]
-    s3_kms_key_arns        = ["arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000001"]
+    create_vpc                   = false
+    vpc_id                       = "vpc-0123456789abcdef0"
+    private_subnet_ids           = ["subnet-0123456789abcdef0", "subnet-0123456789abcdef1"]
+    public_subnet_ids            = []
+    load_balancer_internal       = true
+    route53_zone_id              = "Z0123456789ABC"
+    gitlab_ssh_cidrs             = ["192.0.2.0/24"]
+    ami_id                       = "ami-0123456789abcdef0"
+    bottlerocket_bootstrap_image = "public.ecr.aws/bottlerocket/bottlerocket-bootstrap:v0.3.6"
+    secret_kms_key_arns          = ["arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000"]
+    s3_kms_key_arns              = ["arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000001"]
   }
   assert {
     condition     = length(aws_vpc.this) == 0 && length(aws_subnet.private) == 0 && output.vpc_id == var.vpc_id
@@ -210,6 +227,18 @@ run "existing_network_and_dns" {
     condition     = length(data.aws_iam_policy_document.secrets.statement) == 2 && length(data.aws_iam_policy_document.s3.statement) == 3
     error_message = "Custom KMS keys must receive scoped application-secret/S3 permissions."
   }
+  assert {
+    condition     = strcontains(local.host_user_data, "source = \"public.ecr.aws/bottlerocket/bottlerocket-bootstrap:v0.3.6\"")
+    error_message = "Explicit pinned bootstrap image overrides must be honored."
+  }
+}
+
+run "reject_latest_bootstrap_image" {
+  command = plan
+  variables {
+    bottlerocket_bootstrap_image = "public.ecr.aws/bottlerocket/bottlerocket-bootstrap:latest"
+  }
+  expect_failures = [var.bottlerocket_bootstrap_image]
 }
 
 run "reject_latest_image" {

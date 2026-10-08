@@ -124,9 +124,19 @@ variable "instance_type" {
 }
 
 variable "ami_id" {
-  description = "Optional ECS-optimized x86_64 Amazon Linux 2023 AMI. Null uses the AWS SSM recommended image."
+  description = "Optional x86_64 Bottlerocket aws-ecs-2 AMI. Null uses the latest image from the public AWS SSM parameter."
   type        = string
   default     = null
+}
+
+variable "bottlerocket_bootstrap_image" {
+  description = "Optional pinned replacement for Bottlerocket's official script-running bootstrap image. Null uses the AMI's regional default image."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.bottlerocket_bootstrap_image == null ? true : can(regex("(:[^/:]+|@sha256:[a-f0-9]{64})$", var.bottlerocket_bootstrap_image)) && !endswith(var.bottlerocket_bootstrap_image, ":latest")
+    error_message = "bottlerocket_bootstrap_image must use an explicit version tag or SHA256 digest, not latest."
+  }
 }
 
 variable "gitlab_cpu" {

@@ -19,6 +19,23 @@ resource "aws_ebs_volume" "data" {
   }
 }
 
+resource "aws_launch_template" "host" {
+  name_prefix = "${var.name_prefix}-host-"
+  # Configure Bottlerocket's disposable runtime disk at launch, without claiming
+  # management of the separately attached persistent GitLab volume.
+  block_device_mappings {
+    device_name = "/dev/xvdb"
+    ebs {
+      volume_size           = 40
+      volume_type           = "gp3"
+      encrypted             = true
+      kms_key_id            = var.kms_key_arn
+      delete_on_termination = true
+    }
+  }
+  tags = local.tags
+}
+
 resource "aws_instance" "host" {
   ami                         = var.ami_id == null ? data.aws_ssm_parameter.ecs_ami[0].value : var.ami_id
   instance_type               = var.instance_type
@@ -39,6 +56,10 @@ resource "aws_instance" "host" {
     encrypted             = true
     kms_key_id            = var.kms_key_arn
     delete_on_termination = true
+  }
+  launch_template {
+    id      = aws_launch_template.host.id
+    version = aws_launch_template.host.latest_version
   }
   tags       = merge(local.tags, { Name = "${var.name_prefix}-host" })
   depends_on = [terraform_data.network_validation, aws_route.nat, aws_iam_role_policy_attachment.host]
@@ -69,7 +90,7 @@ resource "aws_ecs_task_definition" "gitlab" {
     for_each = toset(["config", "logs", "data"])
     content {
       name      = volume.value
-      host_path = "/srv/gitlab/${volume.value}"
+      host_path = "/mnt/gitlab/${volume.value}"
     }
   }
 

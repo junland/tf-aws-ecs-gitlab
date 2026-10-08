@@ -18,6 +18,7 @@ module "gitlab" {
   name_prefix                     = "gitlab"
   gitlab_hostname                 = var.gitlab_hostname
   gitlab_image                    = var.gitlab_image
+  bottlerocket_bootstrap_image    = var.bottlerocket_bootstrap_image
   certificate_arn                 = var.certificate_arn
   gitlab_root_password_secret_arn = var.gitlab_root_password_secret_arn
   route53_zone_id                 = var.route53_zone_id
@@ -45,6 +46,12 @@ variable "gitlab_hostname" {
 variable "gitlab_image" {
   description = "Supported pinned official GitLab CE or EE Docker image."
   type        = string
+}
+
+variable "bottlerocket_bootstrap_image" {
+  description = "Optional pinned official Bottlerocket bootstrap image override; null uses the AMI default."
+  type        = string
+  default     = null
 }
 
 variable "certificate_arn" {

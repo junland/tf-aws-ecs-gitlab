@@ -4,8 +4,8 @@ Run the GitLab Linux-package Docker image on Amazon ECS with **required RDS Post
 
 ## Architecture
 
-- One ECS-optimized Amazon Linux 2023 **EC2 host**, in a private subnet, running one GitLab CE/EE container.
-- A separate encrypted gp3 EBS volume persists `/etc/gitlab`, `/var/log/gitlab`, and `/var/opt/gitlab`. Bootstrap mounts the volume before starting ECS. Replacements reuse the volume in the same availability zone.
+- One **Bottlerocket `aws-ecs-2` x86_64 EC2 host**, in a private subnet, running one GitLab CE/EE container.
+- A separate encrypted gp3 EBS volume persists `/etc/gitlab`, `/var/log/gitlab`, and `/var/opt/gitlab`. An essential Bottlerocket bootstrap container mounts it at host `/mnt/gitlab` before ECS starts, on every boot. Replacements reuse the volume in the same availability zone. Separate encrypted root/runtime disks are disposable.
 - A Network Load Balancer terminates HTTPS using ACM on port 443 and forwards to host port 8080. Git-over-SSH uses NLB port 22 and host port 2222. There is no public host administration port or HTTP listener.
 - Private encrypted **RDS PostgreSQL**, Multi-AZ by default, with seven-day backups and an RDS-managed Secrets Manager password.
 - Private **ElastiCache Redis OSS**, with encryption at rest/in transit, seven-day snapshots, and access restricted to the host security group. Redis is single-node and relies on network isolation, not password authentication.
@@ -21,6 +21,7 @@ ECS on EC2 is intentional: GitLab needs shared memory and local block storage fo
 - Terraform >= 1.13; HashiCorp AWS provider >= 6.68, < 7.0.
 - A supported, explicitly versioned **x86_64** official GitLab image. Match GitLab's supported PostgreSQL/Redis versions before deploying or upgrading. `latest` is rejected.
 - An ACM certificate in the deployment region covering your GitLab hostname.
+- Outbound access to the regional Bottlerocket bootstrap/control image registries. The AMI supplies the official bootstrap image by default; `bottlerocket_bootstrap_image` may override it with a compatible, explicitly versioned script-running image.
 - A Secrets Manager secret in the deployment region containing a strong initial root password as a **raw string**, not JSON. The module never reads the secret value into Terraform state.
 - Eight pre-created private S3 buckets in the deployment region. Configure encryption, public-access blocks, versioning, lifecycle policies, and backups in the bucket-owning configuration. Bucket policies must permit the task role; for SSE-KMS buckets supply `s3_kms_key_arns` and suitable key policies.
 - DNS resolving the GitLab hostname to the NLB. Supply `route53_zone_id` to create an alias, or manage an alias/CNAME externally.
@@ -108,7 +109,8 @@ Important optional settings:
 | `gitlab_ssh_cidrs` | `[]` | Git-over-SSH IPv4 allowlist; blocked by default |
 | `route53_zone_id` | `null` | Optional managed DNS alias |
 | `instance_type` | `m6i.xlarge` | x86_64 host, with memory/CPU headroom beyond the container |
-| `ami_id` | AWS recommended ECS AL2023 AMI | Optional compatible ECS-optimized AMI override |
+| `ami_id` | Latest Bottlerocket `aws-ecs-2` x86_64 AMI | Optional compatible Bottlerocket AMI override |
+| `bottlerocket_bootstrap_image` | AMI's regional default | Optional pinned official script-running bootstrap image override |
 | `gitlab_cpu` / `gitlab_memory` | `3072` / `12288` | CPU units / hard memory limit in MiB |
 | `data_volume_size` | `100` | Persistent EBS size in GiB |
 | `kms_key_arn` | `null` | Optional encryption key for EBS, RDS storage, and Redis |
@@ -141,10 +143,18 @@ The PostgreSQL secret output is an **ARN only**, never the password.
 - **TLS boundary:** HTTPS terminates at the NLB; traffic from NLB to GitLab is HTTP inside the private VPC. Database and Redis connections use TLS. The GitLab NGINX configuration supplies HTTPS forwarding headers for the TLS-offload setup.
 - **Persistence:** Task restarts/upgrades preserve repositories and GitLab encryption secrets. The EBS volume has `prevent_destroy = true`; ordinary `terraform destroy` is blocked. Take verified backups, deliberately remove that lifecycle protection only when decommissioning/migrating, and disable RDS deletion protection in a prior apply before destroying. RDS takes a final snapshot; the existing S3 buckets are never destroyed by this module.
 - **Backups:** RDS/Redis snapshots are not complete GitLab backups. Schedule GitLab application backups and EBS snapshots, preserve `/etc/gitlab/gitlab-secrets.json`, protect S3 data, and test coordinated restores. Live block snapshots alone may not be application-consistent.
-- **Storage growth:** Increasing `data_volume_size` enlarges EBS but does not resize the ext4 filesystem; resize it through SSM after expansion. The host root volume is disposable.
-- **Host maintenance:** Use SSM, not direct SSH. Pin `ami_id` for controlled updates if desired; the default SSM recommended AMI may change and cause host replacement on a later apply. There is no Auto Scaling Group or automatic host failover.
+- **Storage growth:** Increasing `data_volume_size` enlarges EBS but does not resize the ext4 filesystem. Resize through an explicitly authorized Bottlerocket admin/maintenance container after expansion, then disable that container. The host root/runtime disks are disposable.
+- **Host maintenance:** Use SSM through Bottlerocket's control container, not direct SSH. The admin container is disabled by default. The immutable host accepts native TOML settings, not cloud-init shell scripts; task IAM and awslogs execution-role support are built into the Bottlerocket ECS agent. Pin a compatible Bottlerocket `ami_id` for controlled replacements; the default public SSM AMI may change on a later apply. There is no Auto Scaling Group or automatic host failover.
 - **Upgrades:** Follow GitLab's required upgrade stops and database compatibility guidance. Change the pinned image only after a verified backup. Never raise service desired count or allow overlapping deployments against this volume.
 - **Scope:** No CI runners, container registry, SMTP, or multi-node Gitaly/Praefect are configured. Provision those separately as needed. NAT, NLB, EC2/EBS, RDS, Redis, and logs incur AWS charges.
+
+### Migrating an existing Amazon Linux host
+
+Back up and verify the EBS/GitLab configuration, database, and S3 data before applying this change. Clear any Amazon Linux `ami_id` override or replace it with a compatible Bottlerocket AMI. The host is replaced with downtime; the protected GitLab EBS volume is stopped/detached and reattached in the same AZ. Its ext4 filesystem and the three existing directories are reused without copying or reformatting. Only host paths change from `/srv/gitlab` to `/mnt/gitlab`; GitLab container paths stay unchanged.
+
+`templates/user_data.toml.tftpl` registers an **essential**, `always` bootstrap container using Bottlerocket's official script executor. It runs the base64-encoded `templates/bootstrap-storage.sh.tftpl`, waits up to ten minutes for the exact EBS NVMe serial, formats only a blank unsigned disk, rejects non-ext4 filesystems, and mounts under Bottlerocket's shared-propagation `/mnt` path with a compatible SELinux context. It then installs the bridge-network IMDS firewall rule before Docker/ECS starts; task-role credentials at `169.254.170.2` remain available. No `/etc/fstab`, cloud-init, or systemd edits are used.
+
+If the volume is not attached before the timeout, the essential bootstrap fails and ECS remains unavailable rather than starting GitLab on empty host directories. Correct the attachment or bootstrap error and reboot through EC2. Boot/reboot, filesystem writes under SELinux, IMDS blocking, and application health should be verified on the chosen AMI in a real AWS deployment; mocked Terraform tests cannot establish these runtime properties.
 
 ## Validation
 
@@ -157,7 +167,7 @@ terraform -chdir=examples/basic init -backend=false
 terraform -chdir=examples/basic validate
 ```
 
-`tests/basic.tftest.hcl` uses AWS **mocks** and plan-only runs: no AWS credentials, cloud resources, or paid services are needed. Tests cover managed/existing networking, private encrypted dependencies, required S3 IAM scope, task mounts/shared memory, single-writer deployment settings, secret references, TLS/SSH, and invalid inputs. These are configuration tests, **not a live deployment or end-to-end GitLab test**.
+`tests/basic.tftest.hcl` uses AWS **mocks** and plan-only runs: no AWS credentials, cloud resources, or paid services are needed. Tests cover managed/existing networking, private encrypted dependencies, required S3 IAM scope, Bottlerocket AMI/TOML/bootstrap settings, encrypted runtime storage, task mounts/shared memory, single-writer deployment settings, secret references, TLS/SSH, and invalid inputs. These are configuration tests, **not a live deployment or end-to-end GitLab test**.
 
 ## License
 

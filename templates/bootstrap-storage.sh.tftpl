@@ -1,0 +1,46 @@
+#!/bin/bash
+set -euo pipefail
+
+volume_serial="$(echo '${volume_id}' | tr -d '-')"
+device=""
+for attempt in $(seq 1 120); do
+  candidate="$(lsblk -dpno NAME,SERIAL | awk -v serial="$volume_serial" '$2 == serial { print $1; exit }')"
+  if [ -n "$candidate" ] && [ -b "/.bottlerocket/rootfs$candidate" ]; then
+    device="/.bottlerocket/rootfs$candidate"
+    break
+  fi
+  sleep 5
+done
+test -n "$device"
+test -b "$device"
+
+filesystem="$(blkid -o value -s TYPE "$device" || true)"
+if [ -z "$filesystem" ]; then
+  # Never format a disk with an unknown signature or a partition table.
+  if [ -n "$(wipefs --no-act --noheadings "$device")" ]; then
+    echo "Refusing to format a disk with existing signatures" >&2
+    exit 1
+  fi
+  mkfs.ext4 "$device"
+elif [ "$filesystem" != "ext4" ]; then
+  echo "Expected an ext4 GitLab data volume" >&2
+  exit 1
+fi
+
+# /mnt propagates mounts into the ECS runtime. Override old Amazon Linux labels.
+mount_path=/.bottlerocket/rootfs/mnt/gitlab
+mkdir -p "$mount_path"
+mount -t ext4 -o context=system_u:object_r:local_t:s0 "$device" "$mount_path"
+mkdir -p "$mount_path/config" "$mount_path/logs" "$mount_path/data"
+chmod 0700 "$mount_path/config"
+
+# Docker starts after bootstrap; pre-create the chain it preserves on startup.
+host_iptables() {
+  chroot /.bottlerocket/rootfs /sbin/iptables -w "$@"
+}
+host_iptables -t filter -S DOCKER-USER >/dev/null 2>&1 ||
+  host_iptables -t filter -N DOCKER-USER
+host_iptables -C DOCKER-USER -d 169.254.169.254/32 -j DROP 2>/dev/null ||
+  host_iptables -I DOCKER-USER 1 -d 169.254.169.254/32 -j DROP
+host_iptables -C FORWARD -j DOCKER-USER 2>/dev/null ||
+  host_iptables -I FORWARD 1 -j DOCKER-USER

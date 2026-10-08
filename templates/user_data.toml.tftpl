@@ -1,0 +1,19 @@
+[settings.ecs]
+cluster = ${jsonencode(cluster_name)}
+allow-privileged-containers = false
+awsvpc-block-imds = true
+logging-drivers = ["json-file", "awslogs", "none"]
+
+[settings.host-containers.control]
+enabled = true
+
+[settings.host-containers.admin]
+enabled = false
+
+[settings.bootstrap-containers.gitlab-storage]
+%{ if bootstrap_image != null ~}
+source = ${jsonencode(bootstrap_image)}
+%{ endif ~}
+mode = "always"
+essential = true
+user-data = ${jsonencode(bootstrap_user_data)}
